@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use bevy::{
     prelude::*,
-    app::{ScheduleRunnerSettings, ScheduleRunnerPlugin, AppExit}, render::camera::RenderTarget,
+    app::{ScheduleRunnerSettings, ScheduleRunnerPlugin, AppExit}, render::camera::RenderTarget, time::FixedTimestep,
 };
 
 fn main() {
@@ -13,8 +13,14 @@ fn main() {
         .insert_resource(ClearColor(Color::rgb(1., 0., 0.)))
         .add_startup_system(setup)
         .add_system_to_stage(CoreStage::PreUpdate, update_cursor_position_system)
+        .add_system_set(
+            SystemSet::new()
+                .with_run_criteria(FixedTimestep::step(TIME_STEP as f64))
+                .with_system(paddle_ai_system.before(check_for_collisions))
+                .with_system(apply_velocity.before(check_for_collisions))
+                .with_system(check_for_collisions)
+            )
         .add_system(controlled_paddle_movement_system)
-        // .add_system(update_cursor_position_system)
         .add_system(escape_system)
         .run();
 }
@@ -28,29 +34,28 @@ struct Paddle;
 #[derive(Component)]
 struct Controlled;
 
-#[derive(Component)]
+#[derive(Component, Deref, DerefMut)]
 struct Velocity(Vec2);
 
 #[derive(Component)]
 struct Ball; 
+
+#[derive(Component)]
+struct Collider;
 
 #[derive(Bundle)]
 struct BallBundle {
     ball: Ball,
     velocity: Velocity,
     sprite_bundle: SpriteBundle,
+    collider: Collider,
 }
 
+#[derive(Component)]
+struct AI;
 
 #[derive(Resource, Default, Debug)]
 struct CursorPosition(Vec2);
-
-// #[derive(Bundle)]
-// struct PaddleBundle {
-//    paddle: Paddle,
-//    sprite_bundle: SpriteBundle,
-// }
-
 
 fn create_sprite(color: Color, pos: Vec3, size: Vec2) -> SpriteBundle {
     SpriteBundle {
@@ -67,13 +72,18 @@ fn create_sprite(color: Color, pos: Vec3, size: Vec2) -> SpriteBundle {
 const PADDLE_WIDTH: f32 = 20.;
 const PADDLE_HEIGHT: f32 = 80.;
 
-const LEFT_PADDLE_X_POS: f32 = -20.0;
+const LEFT_PADDLE_X_POS: f32 = -300.0;
+const RIGHT_PADDLE_X_POS: f32 = -LEFT_PADDLE_X_POS;
 const PADDLE_COLOR: Color = Color::DARK_GREEN;
 
 // Ball constants
 const BALL_COLOR: Color = Color::ORANGE;
 const BALL_WIDTH: f32 = 20.;
 const BALL_HEIGHT: f32 = 20.;
+
+// General constants
+const TIME_STEP: f32 = 0.01666;
+
 
 fn setup(mut commands: Commands) {
     commands.spawn((
@@ -85,15 +95,31 @@ fn setup(mut commands: Commands) {
             create_sprite(PADDLE_COLOR, Vec3::new(LEFT_PADDLE_X_POS, 0., 0.), Vec2::new(PADDLE_WIDTH, PADDLE_HEIGHT)),
             Paddle,
             Controlled,
+            Collider,
+    ));
+
+    commands.spawn((
+            create_sprite(PADDLE_COLOR, Vec3::new(RIGHT_PADDLE_X_POS, 0., 0.), Vec2::new(PADDLE_WIDTH, PADDLE_HEIGHT)),
+            Paddle,
+            AI,
+            Collider
     ));
 
     commands.spawn(BallBundle {
         ball: Ball,
-        velocity: Velocity(Vec2::new(0.1, 0.1)),
+        velocity: Velocity(Vec2::new(100., 100.)),
         sprite_bundle: create_sprite(BALL_COLOR, Vec3::ZERO, Vec2::new(BALL_WIDTH, BALL_HEIGHT)),
+        collider: Collider,
     });
 }
 
+
+fn apply_velocity(mut q: Query<(&Velocity, &mut Transform)>){
+    for (vel, mut transform) in q.iter_mut() {
+        transform.translation.x += vel.x * TIME_STEP;
+        transform.translation.y += vel.y * TIME_STEP;
+    }
+}
 
 
 // fn update_cursor_position_system(wnds: Res<Windows>, q_camera: Query<(&Camera, &GlobalTransform)>, mut cursor_pos: ResMut<CursorPosition>) {
@@ -127,6 +153,42 @@ fn update_cursor_position_system(wnds: Res<Windows>, q_camera: Query<(&Camera, &
     }
 
 }
+
+
+fn check_for_collisions(
+    mut ball_query: Query<(&Transform, &mut Velocity), With<Ball>>,
+    colliders_query: Query<(&Transform), (With<Collider>, Without<Ball>)>
+){
+    let (ball_transform, mut ball_vel)  = ball_query.single_mut();
+
+    {
+        let mut reflect_x = false;
+        let mut reflect_y = false;
+        if ball_transform.translation.x < -400. || ball_transform.translation.x > 400. {
+            reflect_x = true;
+        }
+
+        if ball_transform.translation.y < -400. || ball_transform.translation.y > 400. {
+            reflect_y = true;
+        }
+
+        for (&transform) in colliders_query.iter() {
+        }
+
+
+
+        if reflect_x { ball_vel.x *= -1. };
+        if reflect_y { ball_vel.y *= -1. };
+    }
+}
+
+fn paddle_ai_system(mut paddles: Query<&mut Transform, (With<AI>, With<Paddle>)>, ball: Query<&Transform, (With<Ball>, Without<Paddle>)>) {
+ let ball_pos = ball.single().translation;
+ for mut paddle_pos in paddles.iter_mut() {
+     paddle_pos.translation.y = ball_pos.y;
+ }
+}
+
 
 fn controlled_paddle_movement_system(mut q: Query<&mut Transform, (With<Paddle>, With<Controlled>)>, cursor_pos: Res<CursorPosition>) {
     q.single_mut().translation.y = cursor_pos.0.y; 
