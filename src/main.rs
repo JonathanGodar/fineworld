@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use bevy::{
     prelude::*,
-    app::{ScheduleRunnerSettings, ScheduleRunnerPlugin, AppExit}, render::camera::RenderTarget, time::FixedTimestep,
+    app::{ScheduleRunnerSettings, ScheduleRunnerPlugin, AppExit}, render::camera::RenderTarget, time::FixedTimestep, sprite::collide_aabb::{collide, Collision},
 };
 
 fn main() {
@@ -10,7 +10,6 @@ fn main() {
 
     app.add_plugins(DefaultPlugins)
         .init_resource::<CursorPosition>()
-        .insert_resource(ClearColor(Color::rgb(1., 0., 0.)))
         .add_startup_system(setup)
         .add_system_to_stage(CoreStage::PreUpdate, update_cursor_position_system)
         .add_system_set(
@@ -50,6 +49,65 @@ struct BallBundle {
     sprite_bundle: SpriteBundle,
     collider: Collider,
 }
+#[derive(Component)]
+struct Wall;
+
+#[derive(Bundle)]
+struct WallBundle {
+    wall: Wall,
+    collider: Collider,
+    sprite_bundle: SpriteBundle,
+}
+
+
+impl WallBundle {
+    fn new(loc: WallLocation) -> WallBundle {
+        WallBundle {
+            collider: Collider,
+            sprite_bundle: create_sprite(WALL_COLOR, loc.position(), loc.size()),
+            wall: Wall,
+        }
+    }
+}
+
+enum WallLocation {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+// Wall constants
+const LEFT_WALL: f32 = -500.;
+const RIGHT_WALL: f32 = 500.;
+const TOP_WALL: f32 = 400.;
+const BOTTOM_WALL: f32 = -400.;
+
+const WALL_THICKNESS: f32 = 20.;
+
+const WALL_COLOR: Color = Color::ANTIQUE_WHITE;
+
+impl WallLocation {
+    fn position(&self) -> Vec3 {
+        match self {
+            WallLocation::Left => Vec3::new(LEFT_WALL, 0., 0.),
+            WallLocation::Right => Vec3::new(RIGHT_WALL, 0., 0.),
+            WallLocation::Top => Vec3::new(0., TOP_WALL, 0.),
+            WallLocation::Bottom => Vec3::new(0., BOTTOM_WALL, 0.),
+        }
+    }
+
+    fn size(&self) -> Vec2 {
+        match self {
+            WallLocation::Left => Vec2::new(WALL_THICKNESS, TOP_WALL - BOTTOM_WALL),
+            WallLocation::Right => Vec2::new(WALL_THICKNESS, TOP_WALL - BOTTOM_WALL),
+
+            WallLocation::Top=> Vec2::new(RIGHT_WALL - LEFT_WALL, WALL_THICKNESS),
+            WallLocation::Bottom=> Vec2::new(RIGHT_WALL - LEFT_WALL, WALL_THICKNESS),
+        }
+    }
+}
+
 
 #[derive(Component)]
 struct AI;
@@ -111,6 +169,13 @@ fn setup(mut commands: Commands) {
         sprite_bundle: create_sprite(BALL_COLOR, Vec3::ZERO, Vec2::new(BALL_WIDTH, BALL_HEIGHT)),
         collider: Collider,
     });
+
+    commands.spawn_batch(vec![
+        WallBundle::new(WallLocation::Left),
+        WallBundle::new(WallLocation::Right),
+        WallBundle::new(WallLocation::Top),
+        WallBundle::new(WallLocation::Bottom),
+    ]);
 }
 
 
@@ -120,7 +185,6 @@ fn apply_velocity(mut q: Query<(&Velocity, &mut Transform)>){
         transform.translation.y += vel.y * TIME_STEP;
     }
 }
-
 
 // fn update_cursor_position_system(wnds: Res<Windows>, q_camera: Query<(&Camera, &GlobalTransform)>, mut cursor_pos: ResMut<CursorPosition>) {
 fn update_cursor_position_system(wnds: Res<Windows>, q_camera: Query<(&Camera, &GlobalTransform), With<MainCamera>>, mut cursor_pos: ResMut<CursorPosition>) {
@@ -161,25 +225,29 @@ fn check_for_collisions(
 ){
     let (ball_transform, mut ball_vel)  = ball_query.single_mut();
 
-    {
-        let mut reflect_x = false;
-        let mut reflect_y = false;
-        if ball_transform.translation.x < -400. || ball_transform.translation.x > 400. {
-            reflect_x = true;
-        }
-
-        if ball_transform.translation.y < -400. || ball_transform.translation.y > 400. {
-            reflect_y = true;
-        }
-
-        for (&transform) in colliders_query.iter() {
-        }
-
-
-
-        if reflect_x { ball_vel.x *= -1. };
-        if reflect_y { ball_vel.y *= -1. };
+    let mut reflect_x = false;
+    let mut reflect_y = false;
+    for (&transform) in colliders_query.iter() {
+        let collision = collide(
+            ball_transform.translation,
+            ball_transform.scale.truncate(),
+            transform.translation,
+            transform.scale.truncate()
+        );
+    
+        if let Some(collision) = collision {
+            match collision {
+                Collision::Right => { reflect_x = ball_vel.x < 0. },
+                Collision::Left => { reflect_x = ball_vel.x > 0. },
+                Collision::Bottom => { reflect_y = ball_vel.y > 0. },
+                Collision::Top => { reflect_y = ball_vel.y < 0. },
+                _ => {},
+            }
+        }     
     }
+
+    if reflect_x { ball_vel.x *= -1. };
+    if reflect_y { ball_vel.y *= -1. };
 }
 
 fn paddle_ai_system(mut paddles: Query<&mut Transform, (With<AI>, With<Paddle>)>, ball: Query<&Transform, (With<Ball>, Without<Paddle>)>) {
