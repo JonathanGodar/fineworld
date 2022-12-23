@@ -14,8 +14,20 @@ pub struct FailedCameraPlugin {}
 
 impl Plugin for FailedCameraPlugin {
     fn build(&self, app: &mut App) {
-        app.add_system(camera_movement_system);
+        // app.add_system(camera_movement_system);
     }
+}
+
+pub fn camera_pitch_system(
+    mut q: Query<&mut Transform, With<FailedCamera>>,
+    mut mouse_evr: EventReader<MouseMotion>,
+) {
+    let mut transform = q.get_single_mut().unwrap();
+
+    let mouse_motion = mouse_evr.iter().fold(Vec2::ZERO, |acc, ev| acc + ev.delta);
+    let sensitivity = 0.0009;
+
+    transform.rotate_local_x(-mouse_motion.y * sensitivity);
 }
 
 pub fn camera_movement_system(

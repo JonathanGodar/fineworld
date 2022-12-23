@@ -1,4 +1,7 @@
+mod block;
 mod camera;
+mod chunk;
+mod player;
 
 use std::collections::HashMap;
 
@@ -11,12 +14,17 @@ use bevy::{
     time::FixedTimestep,
     window::{close_on_esc, CursorGrabMode},
 };
-use camera::failed_camera::{FailedCameraBundle, FailedCameraPlugin};
+use bevy_rapier3d::prelude::*;
+use block::UvMappings;
+use camera::failed_camera::{camera_pitch_system, FailedCameraBundle, FailedCameraPlugin};
+use chunk::Chunk;
+use player::{character_velocity_system, gravity_system, player_movement_system, setup_player};
+
+use crate::block::{BlockType, UVs};
 
 #[derive(Hash, Clone, Debug, Eq, PartialEq)]
 enum AppState {
     AssetValidation,
-    PreGame,
     Game,
 }
 
@@ -39,6 +47,9 @@ fn main() {
     .add_plugin(WireframePlugin::default())
     // Bevy resources
     .insert_resource(ClearColor(Color::rgb(0.2, 0.2, 0.8)))
+    // External Plugins
+    .add_plugin(RapierPhysicsPlugin::<NoUserData>::default())
+    .add_plugin(RapierDebugRenderPlugin::default())
     // Custom Plugins
     .add_plugin(FailedCameraPlugin::default())
     // Custom resources
@@ -48,10 +59,24 @@ fn main() {
     .add_startup_system(setup_camera)
     .add_startup_system(load_textures)
     .add_startup_system(setup_world)
+    .add_startup_system(setup_player)
     .add_state(AppState::AssetValidation)
     .add_system_set(SystemSet::new().with_run_criteria(FixedTimestep::step(TIME_STEP as f64)))
     .add_system_set(SystemSet::on_update(AppState::AssetValidation).with_system(validate_textures))
     .add_system_set(SystemSet::on_enter(AppState::Game).with_system(generate_chunk))
+    .add_system_set(
+        SystemSet::on_update(AppState::Game)
+            .label("wanted_movements")
+            .before("movement")
+            .with_system(player_movement_system)
+            .with_system(gravity_system)
+            .with_system(camera_pitch_system),
+    )
+    .add_system_set(
+        SystemSet::on_update(AppState::Game)
+            .label("movement")
+            .with_system(character_velocity_system),
+    )
     .add_system(close_on_esc)
     .add_system(cursor_lock_system)
     .run();
@@ -67,10 +92,6 @@ struct BlockAtlasHandle(Handle<TextureAtlas>);
 // pub struct BlockTextureAtlas(TextureAtlas);
 // #[derive(Deref, DerefMut, Resource, Default)]
 // struct BlockTextureAtlas(TextureAtlas);
-
-type UVs = [[f32; 2]; 4];
-#[derive(Resource, Deref, DerefMut, Default, Debug)]
-struct UvMappings(HashMap<BlockType, (UVs, UVs, UVs)>);
 
 fn construct_atlas(
     mut commands: Commands,
@@ -256,362 +277,6 @@ fn setup_camera(mut commands: Commands) {
         },
         ..default()
     });
-
-    commands
-        .spawn(FailedCameraBundle {
-            camera_bundle: Camera3dBundle {
-                transform: Transform::from_xyz(0., 5., 10.).looking_at(Vec3::ZERO, Vec3::Y),
-                ..default()
-            },
-            failed_camera: camera::failed_camera::FailedCamera,
-        })
-        .insert(MainCamera);
-}
-
-const CHUNK_SIZE: IVec3 = IVec3::new(16, 32, 16);
-
-#[derive(Component, Default)]
-struct Chunk {
-    chunk_coords: IVec3,
-    world_seed: u64,
-    blocks: [[[BlockType; CHUNK_SIZE.z as usize]; CHUNK_SIZE.y as usize]; CHUNK_SIZE.x as usize],
-}
-
-impl Chunk {
-    fn generate_terrain(mut self) -> Self {
-        for (pos, block) in self.iter_blocks_mut() {
-            if pos.y <= 5 {
-                *block = BlockType::Placeholder
-            };
-        }
-
-        self
-    }
-
-    fn iter_blocks_mut(&mut self) -> impl Iterator<Item = (IVec3, &mut BlockType)> {
-        self.blocks
-            .iter_mut()
-            .enumerate()
-            .flat_map(move |(x, yz_slice)| {
-                yz_slice
-                    .iter_mut()
-                    .enumerate()
-                    .flat_map(move |(y, z_strip)| {
-                        z_strip.iter_mut().enumerate().map(move |(z, block)| {
-                            (IVec3::new(x as i32, y as i32, z as i32), block)
-                        })
-                    })
-            })
-    }
-
-    fn iter_blocks(&self) -> impl Iterator<Item = (IVec3, &BlockType)> {
-        self.blocks
-            .iter()
-            .enumerate()
-            .flat_map(move |(x, yz_slice)| {
-                yz_slice.iter().enumerate().flat_map(move |(y, z_strip)| {
-                    z_strip
-                        .iter()
-                        .enumerate()
-                        .map(move |(z, block)| (IVec3::new(x as i32, y as i32, z as i32), block))
-                })
-            })
-    }
-
-    fn get_block(&self, pos: IVec3) -> Option<&BlockType> {
-        if !Chunk::is_within_bounds(pos) {
-            return None;
-        }
-
-        return Some(&self.blocks[pos.x as usize][pos.y as usize][pos.z as usize]);
-    }
-
-    fn get_block_mut(&mut self, pos: IVec3) -> Option<&mut BlockType> {
-        if !Chunk::is_within_bounds(pos) {
-            return None;
-        }
-
-        return Some(&mut self.blocks[pos.x as usize][pos.y as usize][pos.z as usize]);
-    }
-
-    #[inline]
-    fn is_within_bounds(pos: IVec3) -> bool {
-        return pos.x >= 0
-            && pos.x < CHUNK_SIZE.x
-            && pos.y >= 0
-            && pos.y < CHUNK_SIZE.y
-            && pos.z >= 0
-            && pos.z < CHUNK_SIZE.z;
-    }
-
-    fn construct_mesh(&self, uv_mappings: &UvMappings) -> Mesh {
-        let mut indicies = Vec::new();
-        let mut vertecies = Vec::new();
-
-        let mut uvs: Vec<[f32; 2]> = Vec::new();
-
-        for (pos, block) in self.iter_blocks() {
-            if self.get_block(pos) == Some(&BlockType::Air) {
-                continue;
-            }
-
-            let top_visible = self
-                .get_block(pos + IVec3::Y)
-                .map_or(true, |block| block.is_transparent());
-
-            let front_visible = self
-                .get_block(pos + IVec3::Z)
-                .map_or(true, |block| block.is_transparent());
-
-            let right_visible = self
-                .get_block(pos + IVec3::X)
-                .map_or(true, |block| block.is_transparent());
-
-            let back_visible = self
-                .get_block(pos + IVec3::NEG_Z)
-                .map_or(true, |block| block.is_transparent());
-
-            let left_visible = self
-                .get_block(pos + IVec3::NEG_X)
-                .map_or(true, |block| block.is_transparent());
-
-            let bottom_visible = self
-                .get_block(pos + IVec3::NEG_Y)
-                .map_or(true, |block| block.is_transparent());
-
-            if !top_visible
-                && !front_visible
-                && !right_visible
-                && !back_visible
-                && !left_visible
-                && !bottom_visible
-            {
-                continue;
-            }
-
-            let fpos = Vec3::new(pos.x as f32, pos.y as f32, pos.z as f32);
-            // vertecies.extend_from_slice(&[
-            //     [fpos.x, fpos.y, fpos.z],
-            //     [fpos.x + 1., fpos.y, fpos.z],
-            //     [fpos.x + 1., fpos.y, fpos.z + 1.],
-            //     [fpos.x, fpos.y, fpos.z + 1.],
-            //     [fpos.x, fpos.y + 1., fpos.z],
-            //     [fpos.x + 1., fpos.y + 1., fpos.z],
-            //     [fpos.x + 1., fpos.y + 1., fpos.z + 1.],
-            //     [fpos.x, fpos.y + 1., fpos.z + 1.],
-            // ]);
-
-            if top_visible {
-                let vertex_offset = vertecies.len() as u32;
-                vertecies.extend_from_slice(&[
-                    [fpos.x, fpos.y + 1., fpos.z],
-                    [fpos.x + 1., fpos.y + 1., fpos.z],
-                    [fpos.x + 1., fpos.y + 1., fpos.z + 1.],
-                    [fpos.x, fpos.y + 1., fpos.z + 1.],
-                ]);
-
-                indicies.extend_from_slice(&[
-                    vertex_offset + 3,
-                    vertex_offset + 1,
-                    vertex_offset + 0,
-                    // Second triangle
-                    vertex_offset + 3,
-                    vertex_offset + 2,
-                    vertex_offset + 1,
-                ]);
-
-                let uv = &uv_mappings.get(block).expect("Texture not found").0;
-                uvs.extend_from_slice(uv);
-            };
-
-            if front_visible {
-                let vertex_offset = vertecies.len() as u32;
-                vertecies.extend_from_slice(&[
-                    [fpos.x, fpos.y + 1., fpos.z + 1.],
-                    [fpos.x + 1., fpos.y + 1., fpos.z + 1.],
-                    [fpos.x + 1., fpos.y, fpos.z + 1.],
-                    [fpos.x, fpos.y, fpos.z + 1.],
-                ]);
-
-                indicies.extend_from_slice(&[
-                    vertex_offset + 3,
-                    vertex_offset + 1,
-                    vertex_offset + 0,
-                    // Second triangle
-                    vertex_offset + 3,
-                    vertex_offset + 2,
-                    vertex_offset + 1,
-                ]);
-
-                let uv = &uv_mappings.get(block).expect("Texture not found").1;
-                uvs.extend_from_slice(uv);
-            }
-
-            if right_visible {
-                let vertex_offset = vertecies.len() as u32;
-                vertecies.extend_from_slice(&[
-                    [fpos.x + 1., fpos.y + 1., fpos.z + 1.],
-                    [fpos.x + 1., fpos.y + 1., fpos.z],
-                    [fpos.x + 1., fpos.y, fpos.z],
-                    [fpos.x + 1., fpos.y, fpos.z + 1.],
-                ]);
-
-                indicies.extend_from_slice(&[
-                    vertex_offset + 3,
-                    vertex_offset + 1,
-                    vertex_offset + 0,
-                    // Second triangle
-                    vertex_offset + 3,
-                    vertex_offset + 2,
-                    vertex_offset + 1,
-                ]);
-
-                let uv = &uv_mappings.get(block).expect("Texture not found").1;
-                uvs.extend_from_slice(uv);
-            }
-
-            if back_visible {
-                let vertex_offset = vertecies.len() as u32;
-                vertecies.extend_from_slice(&[
-                    [fpos.x + 1., fpos.y + 1., fpos.z],
-                    [fpos.x, fpos.y + 1., fpos.z],
-                    [fpos.x, fpos.y, fpos.z],
-                    [fpos.x + 1., fpos.y, fpos.z],
-                ]);
-
-                indicies.extend_from_slice(&[
-                    vertex_offset + 3,
-                    vertex_offset + 1,
-                    vertex_offset + 0,
-                    // Second triangle
-                    vertex_offset + 3,
-                    vertex_offset + 2,
-                    vertex_offset + 1,
-                ]);
-
-                let uv = &uv_mappings.get(block).expect("Texture not found").1;
-                uvs.extend_from_slice(uv);
-            }
-
-            if left_visible {
-                let vertex_offset = vertecies.len() as u32;
-                vertecies.extend_from_slice(&[
-                    [fpos.x, fpos.y + 1., fpos.z],
-                    [fpos.x, fpos.y + 1., fpos.z + 1.],
-                    [fpos.x, fpos.y, fpos.z + 1.],
-                    [fpos.x, fpos.y, fpos.z],
-                ]);
-
-                indicies.extend_from_slice(&[
-                    vertex_offset + 3,
-                    vertex_offset + 1,
-                    vertex_offset + 0,
-                    // Second triangle
-                    vertex_offset + 3,
-                    vertex_offset + 2,
-                    vertex_offset + 1,
-                ]);
-
-                let uv = &uv_mappings.get(block).expect("Texture not found").1;
-                uvs.extend_from_slice(uv);
-            }
-
-            if bottom_visible {
-                let vertex_offset = vertecies.len() as u32;
-                vertecies.extend_from_slice(&[
-                    [fpos.x, fpos.y, fpos.z + 1.],
-                    [fpos.x + 1., fpos.y, fpos.z + 1.],
-                    [fpos.x + 1., fpos.y, fpos.z],
-                    [fpos.x, fpos.y, fpos.z],
-                ]);
-
-                indicies.extend_from_slice(&[
-                    vertex_offset + 3,
-                    vertex_offset + 1,
-                    vertex_offset + 0,
-                    // Second triangle
-                    vertex_offset + 3,
-                    vertex_offset + 2,
-                    vertex_offset + 1,
-                ]);
-
-                let uv = &uv_mappings.get(block).expect("Texture not found").2;
-                uvs.extend_from_slice(uv);
-            }
-
-            //             if front_visible {
-            //                 // Front faces
-            //                 indicies.extend_from_slice(&[
-            //                     vertex_offset + 3,
-            //                     vertex_offset + 6,
-            //                     vertex_offset + 7,
-            //                     // Second triangle
-            //                     vertex_offset + 3,
-            //                     vertex_offset + 2,
-            //                     vertex_offset + 6,
-            //                 ]);
-            //             }
-
-            //             if right_visible {
-            //                 // Right faces
-            //                 indicies.extend_from_slice(&[
-            //                     vertex_offset + 5,
-            //                     vertex_offset + 6,
-            //                     vertex_offset + 2,
-            //                     // Second triangle
-            //                     vertex_offset + 1,
-            //                     vertex_offset + 5,
-            //                     vertex_offset + 2,
-            //                 ]);
-            //             }
-
-            //             if back_visible {
-            //                 // Back faces
-            //                 indicies.extend_from_slice(&[
-            //                     vertex_offset + 1,
-            //                     vertex_offset + 0,
-            //                     vertex_offset + 5,
-            //                     // Second triangle
-            //                     vertex_offset + 0,
-            //                     vertex_offset + 4,
-            //                     vertex_offset + 5,
-            //                 ]);
-            //             }
-
-            //             if left_visible {
-            //                 // Left faces
-            //                 indicies.extend_from_slice(&[
-            //                     vertex_offset + 7,
-            //                     vertex_offset + 4,
-            //                     vertex_offset + 0,
-            //                     // Second triangle
-            //                     vertex_offset + 0,
-            //                     vertex_offset + 3,
-            //                     vertex_offset + 7,
-            //                 ]);
-            //             }
-
-            //             if bottom_visible {
-            //                 // Bottom faces
-            //                 indicies.extend_from_slice(&[
-            //                     vertex_offset + 3,
-            //                     vertex_offset,
-            //                     vertex_offset + 1,
-            //                     // Second triangle
-            //                     vertex_offset + 2,
-            //                     vertex_offset + 3,
-            //                     vertex_offset + 1,
-            //                 ]);
-            //             }
-        }
-
-        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList);
-
-        mesh.set_indices(Some(Indices::U32(indicies)));
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertecies);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-        mesh
-    }
 }
 
 #[derive(Deref, DerefMut)]
@@ -633,15 +298,6 @@ enum BlockFace {
     Back,
     Left,
     Bottom,
-}
-
-#[derive(Default, PartialEq, Debug, Reflect, Eq, PartialOrd, Ord, Hash)]
-enum BlockType {
-    #[default]
-    Air,
-    Grass,
-    Stone,
-    Placeholder,
 }
 
 struct BlockData {
@@ -719,11 +375,6 @@ fn generate_chunk(
     atlas_handle: Res<BlockAtlasHandle>,
     texture_atlases: Res<Assets<TextureAtlas>>,
 ) {
-    // println!(
-    //     "{:#?}",
-    //     asset_server.get_load_state(block_textures.0.clone())
-    // );
-
     println!("Generating chunk");
     let chunk_coords = IVec3::ZERO;
     let world_seed = 0u64;
@@ -734,7 +385,7 @@ fn generate_chunk(
     }
     .generate_terrain();
 
-    let mesh = chunk.construct_mesh(&uv_mappings);
+    let (mesh, collider) = chunk.construct_mesh(&uv_mappings);
 
     let atlas_image_handle = texture_atlases.get(&atlas_handle).unwrap().texture.clone();
 
@@ -744,6 +395,8 @@ fn generate_chunk(
         unlit: true,
         ..default()
     });
+
+    // let collider = Collider::trimesh(mesh.)
 
     commands.spawn(PbrBundle {
         material: material.clone(),
@@ -766,7 +419,10 @@ fn generate_chunk(
         },
     };
 
-    commands.spawn(chunk_bundle).insert(Wireframe);
+    commands
+        .spawn(chunk_bundle)
+        .insert(collider)
+        .insert(RigidBody::Fixed); //.insert(Wireframe);
 }
 
 fn setup_world(
