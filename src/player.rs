@@ -17,12 +17,6 @@ pub fn setup_player(
     mut meshes: ResMut<Assets<Mesh>>,
     mut material: ResMut<Assets<StandardMaterial>>,
 ) {
-    //     mesh::from(
-    // let mesh = meshes.add(
-    //         shape::Capsule::default()
-    //         )
-    //     );
-
     let child = commands
         .spawn((
             FailedCameraBundle {
@@ -52,12 +46,11 @@ pub fn setup_player(
                     .into(),
                 ),
                 material: material.add(StandardMaterial::from(Color::BLUE)),
-                transform: Transform::from_xyz(7.5, 15., 7.5),
+                transform: Transform::from_xyz(7.5, 36., 7.5),
                 ..Default::default()
             },
             CharacterVelocity::default(),
-            Gravity::default(),
-            // TransformBundle::from_transform(Transform::from_xyz(7., 15., 7.)),
+            // Gravity::default(),
         ))
         .add_child(child);
 }
@@ -68,7 +61,6 @@ pub fn player_movement_system(
     mut query: Query<
         (
             &mut Transform,
-            // &mut KinematicCharacterController,
             Option<&KinematicCharacterControllerOutput>,
             &mut CharacterVelocity,
         ),
@@ -102,7 +94,7 @@ pub fn player_movement_system(
     };
 
     if keys.pressed(KeyCode::Space) && kinematic_output.map_or(false, |outp| outp.grounded) {
-        wanted_move += transform.up();
+        wanted_move += transform.up() * 10.;
         any_movement_requested = true;
     };
 
@@ -114,14 +106,10 @@ pub fn player_movement_system(
     if !any_movement_requested {
         return;
     }
-    // controller.translation = Some(Vec3::new(0., -0.2, 0.));
 
     character_velocity.0 += (wanted_move * MOVEMENT_SPEED)
-        .max(MAX_MOVEMENT_SPEED)
-        .min(-MAX_MOVEMENT_SPEED);
-    //     wanted_move = wanted_move.normalize();
-    //     controller.translation = Some(wanted_move);
-    //     transform.translation += wanted_move * 0.2;
+        .min(MAX_MOVEMENT_SPEED)
+        .max(-MAX_MOVEMENT_SPEED);
 }
 
 #[derive(Component, Deref, DerefMut)]
@@ -143,7 +131,7 @@ pub fn gravity_system(
     )>,
 ) {
     for mut entity in q.iter_mut() {
-        if !entity.2.grounded {
+        if !entity.2.grounded && entity.1 .0.y < 0. {
             entity.0 .0 += entity.1 .0;
         }
     }
