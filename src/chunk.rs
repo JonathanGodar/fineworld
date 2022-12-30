@@ -43,6 +43,9 @@ pub struct LoadedChunks(HashMap<IVec3, Entity>);
 pub struct GeneratingChunks(HashMap<IVec3, Entity>);
 
 #[derive(Component)]
+pub struct IsInitalMeshGeneration;
+
+#[derive(Component)]
 pub struct RequiresMeshGeneration;
 
 #[derive(Component, Deref, DerefMut)]
@@ -380,7 +383,6 @@ impl Chunk {
 
 }
 
-
 pub fn chunk_load_system(
     mut commands: Commands,
     world_seed: Res<WorldSeed>,
@@ -427,7 +429,7 @@ pub fn handle_generated_chunks_system(
     mut commands: Commands,
     mut q: Query<(Entity, &mut GeneratingChunk)>,
     mut generating_chunks: ResMut<GeneratingChunks>,
-    mut loaded_chunks: ResMut<LoadedChunks>
+    mut loaded_chunks: ResMut<LoadedChunks>,
 ) {
     for (entity, mut generating_chunk) in q.iter_mut() {
         if let Some(chunk) = future::block_on(future::poll_once(&mut **generating_chunk)){
@@ -441,7 +443,7 @@ pub fn handle_generated_chunks_system(
                 local: Transform::from_translation(chunk.get_world_coords()),
                 ..default()
             }).insert(
-                (chunk, RequiresMeshGeneration)
+                (chunk, RequiresMeshGeneration, IsInitalMeshGeneration)
             );
         }
     }
@@ -450,15 +452,14 @@ pub fn handle_generated_chunks_system(
 pub fn queue_mesh_generation_system(
     mut commands: Commands,
     
-    q: Query<(Entity, &Chunk), With<RequiresMeshGeneration>>,
+    q: Query<(Entity, &Chunk, Option<&IsInitalMeshGeneration>), With<RequiresMeshGeneration>>,
     q_all_chunks: Query<&Chunk>,
     mut meshes: ResMut<Assets<Mesh>>,
     material: Res<ChunkMaterialHandle>,
     uv_mappings: Res<UvMappingsRes>,
     loaded_chunks: Res<LoadedChunks>,
 ) {
-    q.for_each(|(e_id, chnk)| {
-        let p = chnk.chunk_coords;
+    q.for_each(|(e_id, chnk, is_inital)| {
         let dirs = [
             IVec3::new(0, 1, 0),
             IVec3::new(0, 0, 1),
@@ -482,27 +483,33 @@ pub fn queue_mesh_generation_system(
             // let neighbors = q.get_
             println!("Generating mesh {:?}", chnk.chunk_coords);
             let material = (**material).clone();
-            // e.insert(PhysicsBundle)
+
             // e.insert(material).insert(meshes.add(mesh));
-            // e.insert((
-            //     **material,
-            //     mesh,
-            // ));
+            
             let pbr_bundle = PbrBundle {
                 material: material,
                 transform: Transform::from_translation(chnk.get_world_coords()),
                 mesh: meshes.add(mesh),
                 ..default()
             };
+
             e.insert(pbr_bundle);
-            e.insert(Wireframe);
+            e.insert(collider);
+            e.insert(RigidBody::Fixed);
         }
 
-        // commands.entity(e).insert(
-        //     chnk.construct_mesh
-        // )
+        if is_inital.is_some() {
+            e.remove::<IsInitalMeshGeneration>();
+            e.insert(LoadedChunk);
+            // evw.send(ChunkLoadedEvent(e.id()));
+        } 
     });
 }
+
+
+#[derive(Component)]
+pub struct LoadedChunk;
+
 
 
 

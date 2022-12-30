@@ -23,7 +23,7 @@ use chunk::{
     LoadedChunks, GeneratingChunks, queue_mesh_generation_system, handle_generated_chunks_system, 
 };
 use game_world::WorldSeed;
-use player::{character_velocity_system, gravity_system, player_movement_system, setup_player};
+use player::{character_velocity_system, gravity_system, player_movement_system, setup_player_system, add_gravity};
 
 use crate::block::{BlockType, UVs};
 
@@ -60,6 +60,9 @@ fn main() {
     // .add_plugin(RapierDebugRenderPlugin::default())
     // Custom Plugins
     // .add_plugin(FailedCameraPlugin::default())
+    
+    // Custom events
+
     // Custom resources
     .init_resource::<BlockTextureHandles>()
     .init_resource::<LoadedChunks>()
@@ -68,7 +71,7 @@ fn main() {
     // Startup Systems
     .add_startup_system(load_textures)
     .add_startup_system(setup_world)
-    .add_startup_system(setup_player)
+    .add_startup_system(setup_player_system)
     .add_state(AppState::AssetValidation)
     .add_system_set(SystemSet::new().with_run_criteria(FixedTimestep::step(TIME_STEP as f64)))
     .add_system_set(SystemSet::on_update(AppState::AssetValidation).with_system(validate_textures))
@@ -84,8 +87,11 @@ fn main() {
             // .with_system(process_chunk_tasks_system)
             .with_system(handle_generated_chunks_system)
             .with_system(queue_mesh_generation_system)
+            .with_system(add_gravity)
             .with_system(chunk_unload_system),
     )
+    // .add_system(
+    // )
     .add_system_set(
         SystemSet::on_update(AppState::Game)
             .label("movement")
