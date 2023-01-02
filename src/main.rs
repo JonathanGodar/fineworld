@@ -4,13 +4,12 @@ mod chunk;
 mod game_world;
 mod player;
 
-
-
 use bevy::{
-    pbr::wireframe::{WireframePlugin},
+    diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
+    pbr::wireframe::WireframePlugin,
     prelude::*,
     time::FixedTimestep,
-    window::{close_on_esc, CursorGrabMode}, diagnostic::{LogDiagnosticsPlugin, FrameTimeDiagnosticsPlugin},
+    window::{close_on_esc, CursorGrabMode},
 };
 use bevy_rapier3d::prelude::*;
 use block::{
@@ -18,12 +17,15 @@ use block::{
     BlockTextureHandles, UvMappingsRes,
 };
 use camera::failed_camera::{camera_pitch_system, FailedCameraBundle, FailedCameraPlugin};
-use chunk::{
-    chunk_load_system, chunk_unload_system, Chunk,
-    LoadedChunks, GeneratingChunks, queue_mesh_generation_system, handle_generated_chunks_system, 
+use chunk::chunk::{
+    chunk_load_system, chunk_unload_system, handle_generated_chunks_system,
+    queue_mesh_generation_system, Chunk, GeneratingChunks, LoadedChunks,
 };
 use game_world::WorldSeed;
-use player::{character_velocity_system, gravity_system, player_movement_system, setup_player_system, add_gravity};
+use player::{
+    block_break_system, character_velocity_system, gravity_system, player_movement_system,
+    setup_player_system,
+};
 
 use crate::block::{BlockType, UVs};
 
@@ -51,18 +53,15 @@ fn main() {
     // Bevy Plugins
     .add_plugin(WireframePlugin::default())
     .add_plugin(LogDiagnosticsPlugin::default())
-    .add_plugin(FrameTimeDiagnosticsPlugin::default())
+    // .add_plugin(FrameTimeDiagnosticsPlugin::default())
     // Bevy resources
     .insert_resource(ClearColor(Color::rgb(0.2, 0.2, 0.8)))
-
     // External Plugins
     .add_plugin(RapierPhysicsPlugin::<NoUserData>::default())
     // .add_plugin(RapierDebugRenderPlugin::default())
     // Custom Plugins
     // .add_plugin(FailedCameraPlugin::default())
-    
     // Custom events
-
     // Custom resources
     .init_resource::<BlockTextureHandles>()
     .init_resource::<LoadedChunks>()
@@ -75,7 +74,6 @@ fn main() {
     .add_state(AppState::AssetValidation)
     .add_system_set(SystemSet::new().with_run_criteria(FixedTimestep::step(TIME_STEP as f64)))
     .add_system_set(SystemSet::on_update(AppState::AssetValidation).with_system(validate_textures))
-    // .add_system_set(SystemSet::on_enter(AppState::Game).with_system(chunk_load_enqueue_system))
     .add_system_set(
         SystemSet::on_update(AppState::Game)
             .label("wanted_movements")
@@ -87,11 +85,9 @@ fn main() {
             // .with_system(process_chunk_tasks_system)
             .with_system(handle_generated_chunks_system)
             .with_system(queue_mesh_generation_system)
-            .with_system(add_gravity)
-            .with_system(chunk_unload_system),
+            .with_system(chunk_unload_system)
+            .with_system(block_break_system),
     )
-    // .add_system(
-    // )
     .add_system_set(
         SystemSet::on_update(AppState::Game)
             .label("movement")
@@ -102,10 +98,8 @@ fn main() {
     .run();
 }
 
-
-
 #[derive(Component)]
-struct MainCamera;
+pub struct MainCamera;
 
 fn setup_world(
     mut commands: Commands,

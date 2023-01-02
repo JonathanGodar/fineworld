@@ -3,64 +3,34 @@ use bevy_rapier3d::prelude::*;
 
 use crate::{
     camera::{self, failed_camera::FailedCameraBundle},
-    MainCamera, chunk::{self, LoadedChunks, Chunk, LoadedChunk},
+    chunk::{self, Chunk, LoadedChunk, LoadedChunks},
+    MainCamera,
 };
 
 #[derive(Component, Default)]
 pub struct Player {}
 
 #[derive(Component, Default, Deref, DerefMut)]
-pub struct CharacterVelocity(Vec3);
+// Controlled by the environment, eg. gravity
+pub struct EnvironmentVelocity(Vec3);
 
-// pub fn create_player(
-//     mut material: ResMut<Assets<StandardMaterial>>,
-// ) {
-// }
-
-pub fn add_gravity(
-    mut commands: Commands,
-    player: Query<Entity, (With<Player>, Without<Gravity>)>,
-    chunks: Query<&Chunk, Added<LoadedChunk>>,
-
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut material: ResMut<Assets<StandardMaterial>>,
-){
-    if let Ok(player) = player.get_single(){
-        if chunks.iter().find(|chnk| chnk.chunk_coords == IVec3::new(0, 1, 0)).is_none() {
-            return;
-        }
-    
-        commands.entity(player).insert(Gravity::default());
-    }
-}
+#[derive(Component, Default, Deref, DerefMut)]
+// Controlled by the controller of the entity
+pub struct ControlledVelocity(Vec3);
 
 pub fn setup_player_system(
     mut commands: Commands,
     player: Query<&Player>,
     // chunks: Query<&Chunk, Added<LoadedChunk>>,
-
     mut meshes: ResMut<Assets<Mesh>>,
     mut material: ResMut<Assets<StandardMaterial>>,
-
 ) {
-    // if !player.is_empty() { return; }
-    // if chunks.iter().find(|chnk| chnk.chunk_coords == IVec3::new(0, 1, 0)).is_none() {
-    //     return;
-    // }
-
-    // // chunk
-    // chunk_evr.iter().find_map(|chnk| chnk)
-    // // chunk_evr.iter().find(|chnk| chunks[chunk_evr]){
-
-    // }
-    
-    // for evt in chunk_loaded
-
     let child = commands
         .spawn((
             FailedCameraBundle {
                 camera_bundle: Camera3dBundle {
-                    transform: Transform::from_xyz(0., 5., 10.).looking_at(Vec3::ZERO, Vec3::Y),
+                    transform: Transform::from_xyz(0., 1., 0.1).looking_at(Vec3::ZERO, Vec3::Y),
+                    // transform: Transform::from_xyz(0., 5., 10.).looking_at(Vec3::ZERO, Vec3::Y),
                     ..default()
                 },
                 failed_camera: camera::failed_camera::FailedCamera,
@@ -72,9 +42,9 @@ pub fn setup_player_system(
     commands
         .spawn((
             Player::default(),
-            // RigidBody::KinematicPositionBased,
             Collider::capsule_y(0.5, 0.5),
             KinematicCharacterController::default(),
+            Gravity::default(),
             PbrBundle {
                 mesh: meshes.add(
                     shape::Capsule {
@@ -88,7 +58,8 @@ pub fn setup_player_system(
                 transform: Transform::from_xyz(7.5, 36., 7.5),
                 ..Default::default()
             },
-            CharacterVelocity::default(),
+            EnvironmentVelocity::default(),
+            ControlledVelocity::default(),
         ))
         .add_child(child);
 }
@@ -96,8 +67,52 @@ pub fn setup_player_system(
 const MOVEMENT_SPEED: f32 = 0.005;
 const MAX_MOVEMENT_SPEED: Vec3 = Vec3::new(0.02, f32::MAX, 0.02);
 pub fn player_movement_system(
-    q: Query<&Transform, With<Player>>
-){
+    mut q: Query<
+        (
+            &mut ControlledVelocity,
+            &mut EnvironmentVelocity,
+            &mut Transform,
+            &KinematicCharacterController,
+            &KinematicCharacterControllerOutput,
+        ),
+        With<Player>,
+    >,
+    keys: Res<Input<KeyCode>>,
+    mut mouse_evr: EventReader<MouseMotion>,
+) {
+    for (
+        mut controlled_velocity,
+        mut environment_velocity,
+        mut transform,
+        controller,
+        kinematic_output,
+    ) in q.iter_mut()
+    {
+        let mouse_motion = mouse_evr.iter().fold(Vec2::ZERO, |acc, ev| acc + ev.delta);
+        let sensitivity = 0.0045;
+
+        transform.rotate_local_y(-mouse_motion.x * sensitivity);
+
+        controlled_velocity.x = 0.;
+        controlled_velocity.z = 0.;
+
+        let desired_vel = Vec3::ZERO;
+
+        if keys.pressed(KeyCode::W) {
+            controlled_velocity.z -= 0.5;
+            // if velocity.z > -0.5 {
+            //     velocity.z = -0.5;
+            // }
+            // velocity.z += -0
+            // velocity.z = velocity.z.min(-0.5);
+        }
+
+        if keys.pressed(KeyCode::Space) && kinematic_output.grounded {
+            environment_velocity.y = 1.;
+        }
+
+        *controlled_velocity = ControlledVelocity(transform.rotation * controlled_velocity.0);
+    }
     // println!("{:?}", q.get_single().map(|t| t.translation));
 }
 // pub fn player_movement_system(
@@ -156,55 +171,98 @@ pub fn player_movement_system(
 // }
 
 #[derive(Component)]
-pub struct Gravity{
-    acceleration: Vec3,
-    prev_vel: Vec3,
+pub struct Gravity {
+    acceleration: f32,
+    prev_vel: f32,
+    max_vel: f32,
 }
 
-const GRAVITY_CONSTANT: Vec3 = Vec3::new(0., -0.00982, 0.);
+const GRAVITY_CONSTANT: f32 = -0.00982;
 
 impl Default for Gravity {
     fn default() -> Self {
         Self {
             acceleration: GRAVITY_CONSTANT,
-            prev_vel: Vec3::ZERO,
+            prev_vel: 0.,
+            max_vel: -2.,
         }
     }
 }
 
 pub fn gravity_system(
     mut q: Query<(
-        // &mut CharacterVelocity,
-        &mut KinematicCharacterController,
+        &mut EnvironmentVelocity,
+        // &mut KinematicCharacterController,
         &mut Gravity,
         &KinematicCharacterControllerOutput,
     )>,
 ) {
-    for (mut controller, mut gravity, output) in q.iter_mut() {
+    for (mut velocity, mut gravity, output) in q.iter_mut() {
         let acceleration = gravity.acceleration;
         if output.grounded {
-            gravity.prev_vel = Vec3::ZERO;
+            gravity.prev_vel = 0.;
         } else {
             gravity.prev_vel += acceleration;
-            controller.translation = Some(gravity.prev_vel);
-            println!("hello! {:?}", controller.translation);
-            
-            // transform.translation += gravity.prev_vel;
+            velocity.y = (gravity.prev_vel + velocity.y).max(gravity.max_vel);
         }
     }
-    // for mut entity in q.
-    // for mut entity in q.iter_mut() {
-    //     if !entity.2.grounded && entity.1 .0.y < 0. {
-    //         entity.0 .0 += entity.1 .0;
-    //     }
-    // }
 }
 
 pub fn character_velocity_system(
-    mut q: Query<(&mut KinematicCharacterController, &CharacterVelocity)>,
+    mut q: Query<(
+        &mut KinematicCharacterController,
+        Option<&mut EnvironmentVelocity>,
+        Option<&mut ControlledVelocity>,
+    )>,
 ) {
-    // for entity in q.iter_mut() {
-    //     let (mut controller, velocity) = entity;
-    //     controller.translation = Some(**velocity);
-    // }
+    for (mut controller, mut environment_vel_opt, mut controlled_vel_opt) in q.iter_mut() {
+        let mut vel_result = Vec3::ZERO;
+        if let Some(controlled_vel) = controlled_vel_opt {
+            vel_result += controlled_vel.0;
+        }
+        if let Some(environment_vel) = environment_vel_opt {
+            vel_result += environment_vel.0;
+        }
+
+        controller.translation = Some(vel_result);
+    }
+}
+
+pub fn block_break_system(
+    mut q: Query<&GlobalTransform, With<MainCamera>>,
+    rapier_ctx: Res<RapierContext>,
+    mouse: Res<Input<MouseButton>>,
+) {
+    let transform = q
+        .get_single()
+        .expect("Found no camera in block_break_system");
+
+    // QueryFilterFlags::
+
+    if !mouse.pressed(MouseButton::Left) {
+        // println!("Mouse not pressed");
+        return;
+    }
+
+    if let Some((entity, toi)) = rapier_ctx.cast_ray_and_get_normal(
+        transform.translation(),
+        transform.forward(),
+        100.,
+        true,
+        QueryFilter::new(),
+    ) {
+        println!("{:?}, {:?}", entity, toi)
+    } else {
+        println!("Cast ray, found nothing");
+    }
+}
+
+pub fn print_player_pos(mut q: Query<&Transform, With<Player>>, keys: Res<Input<KeyCode>>) {
+    if !keys.just_pressed(KeyCode::P) {
+        return;
+    }
+
+    let transform = q.get_single();
+
+    println!("PlayerPos: {:?}")
 }
