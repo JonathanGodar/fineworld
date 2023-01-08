@@ -3,8 +3,8 @@ use bevy_rapier3d::prelude::*;
 
 use crate::{
     camera::{self, failed_camera::FailedCameraBundle},
-    chunk::{self, Chunk, LoadedChunk, LoadedChunks},
-    MainCamera,
+    chunk::chunk_manager::ChunkManager,
+    CollisionLayers, MainCamera,
 };
 
 #[derive(Component, Default)]
@@ -21,7 +21,6 @@ pub struct ControlledVelocity(Vec3);
 pub fn setup_player_system(
     mut commands: Commands,
     player: Query<&Player>,
-    // chunks: Query<&Chunk, Added<LoadedChunk>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut material: ResMut<Assets<StandardMaterial>>,
 ) {
@@ -43,6 +42,8 @@ pub fn setup_player_system(
         .spawn((
             Player::default(),
             Collider::capsule_y(0.5, 0.5),
+            CollisionGroups::new(Group::GROUP_1, Group::empty()),
+            // CollisionGroups::new(CollisionLayers::PLAYER.bits, CollisionLayers::all().bits),
             KinematicCharacterController::default(),
             Gravity::default(),
             PbrBundle {
@@ -100,11 +101,8 @@ pub fn player_movement_system(
 
         if keys.pressed(KeyCode::W) {
             controlled_velocity.z -= 0.5;
-            // if velocity.z > -0.5 {
-            //     velocity.z = -0.5;
-            // }
-            // velocity.z += -0
-            // velocity.z = velocity.z.min(-0.5);
+        } else if keys.pressed(KeyCode::S) {
+            controlled_velocity.z = 0.5;
         }
 
         if keys.pressed(KeyCode::Space) && kinematic_output.grounded {
@@ -113,62 +111,7 @@ pub fn player_movement_system(
 
         *controlled_velocity = ControlledVelocity(transform.rotation * controlled_velocity.0);
     }
-    // println!("{:?}", q.get_single().map(|t| t.translation));
 }
-// pub fn player_movement_system(
-//     mut query: Query<
-//         (
-//             &mut Transform,
-//             Option<&KinematicCharacterControllerOutput>,
-//             // &mut CharacterVelocity,
-//         ),
-//         With<Player>,
-//     >,
-//     keys: Res<Input<KeyCode>>,
-//     mut mouse_evr: EventReader<MouseMotion>,
-// ) {
-//     let (mut transform, kinematic_output, mut character_velocity) = query.single_mut();
-
-//     let mut any_movement_requested = false;
-//     let mut wanted_move = Vec3::ZERO;
-
-//     // Forward is -z
-//     if keys.pressed(KeyCode::W) {
-//         wanted_move += transform.forward();
-//         any_movement_requested = true;
-//     } else if keys.pressed(KeyCode::S) {
-//         wanted_move += transform.back();
-//         any_movement_requested = true;
-//     }
-
-//     // Do nothing if A and D are pressed together
-//     if keys.pressed(KeyCode::A) && keys.pressed(KeyCode::D) {
-//     } else if keys.pressed(KeyCode::D) {
-//         wanted_move += transform.right();
-//         any_movement_requested = true;
-//     } else if keys.pressed(KeyCode::A) {
-//         wanted_move += transform.left();
-//         any_movement_requested = true;
-//     };
-
-//     if keys.pressed(KeyCode::Space) && kinematic_output.map_or(false, |outp| outp.grounded) {
-//         wanted_move += transform.up() * 10.;
-//         any_movement_requested = true;
-//     };
-
-//     let mouse_motion = mouse_evr.iter().fold(Vec2::ZERO, |acc, ev| acc + ev.delta);
-//     let sensitivity = 0.0045;
-
-//     transform.rotate_local_y(-mouse_motion.x * sensitivity);
-
-//     if !any_movement_requested {
-//         return;
-//     }
-
-//     character_velocity.0 += (wanted_move * MOVEMENT_SPEED)
-//         .min(MAX_MOVEMENT_SPEED)
-//         .max(-MAX_MOVEMENT_SPEED);
-// }
 
 #[derive(Component)]
 pub struct Gravity {
@@ -192,7 +135,6 @@ impl Default for Gravity {
 pub fn gravity_system(
     mut q: Query<(
         &mut EnvironmentVelocity,
-        // &mut KinematicCharacterController,
         &mut Gravity,
         &KinematicCharacterControllerOutput,
     )>,
@@ -232,37 +174,28 @@ pub fn block_break_system(
     mut q: Query<&GlobalTransform, With<MainCamera>>,
     rapier_ctx: Res<RapierContext>,
     mouse: Res<Input<MouseButton>>,
+    mut chunk_manager: ResMut<ChunkManager>,
 ) {
     let transform = q
         .get_single()
         .expect("Found no camera in block_break_system");
 
-    // QueryFilterFlags::
-
-    if !mouse.pressed(MouseButton::Left) {
-        // println!("Mouse not pressed");
+    if !mouse.just_pressed(MouseButton::Left) {
         return;
     }
 
-    if let Some((entity, toi)) = rapier_ctx.cast_ray_and_get_normal(
+    if let Some((entity, ray_intersect)) = rapier_ctx.cast_ray_and_get_normal(
         transform.translation(),
         transform.forward(),
         100.,
         true,
-        QueryFilter::new(),
+        QueryFilter::new().groups(InteractionGroups::default().with_filter(0b10.into())),
     ) {
-        println!("{:?}, {:?}", entity, toi)
-    } else {
-        println!("Cast ray, found nothing");
+        let point_inside_block = ray_intersect.point + ray_intersect.normal * -0.01;
+        chunk_manager.break_block(point_inside_block.as_ivec3());
+
+        // ray_intersect.point -
+
+        // println!("{:?}, {:?}", entity, toi)
     }
-}
-
-pub fn print_player_pos(mut q: Query<&Transform, With<Player>>, keys: Res<Input<KeyCode>>) {
-    if !keys.just_pressed(KeyCode::P) {
-        return;
-    }
-
-    let transform = q.get_single();
-
-    println!("PlayerPos: {:?}")
 }
